@@ -1,4 +1,5 @@
 import os
+from socket import gethostname
 from timeit import default_timer as timer
 from datetime import datetime
 import yaml
@@ -82,13 +83,18 @@ if __name__ == "__main__":
 
         run_id = datetime.now().strftime("%Y-%m-%d-%I:%M:%S_%p")
 
-        train_dl, val_dl = datasets(train_df, TRAIN_BATCH, val_df, VAL_BATCH, tokenizer, MAX_LEN, rank, world_size)
+        # note we pass global ranks and not local ranks to the dataloaders
+        train_dl, train_sampler, val_dl, val_sampler = datasets(train_df, TRAIN_BATCH, val_df, VAL_BATCH, tokenizer, MAX_LEN, rank, world_size)
 
         # Set up model
         model_class = ModelClass(model_name=MODEL, num_labels=NUM_LABELS, len_train_dl=len(train_dl), lr=LR, epochs=NUM_EPOCHS)
 
-        model = model_class.model
+        model = model_class.model.to(local_rank)
+        ddp_model = DDP(model, device_ids=[local_rank])
         optimizer, scheduler = model_class.opt_sch()
+
+        torch.cuda.set_device(local_rank)
+        print(f"host: {gethostname()}, rank: {rank}, local_rank: {local_rank}")
 
         if rank == 0:
             print(f"--> running with id {run_id}")
@@ -100,13 +106,16 @@ if __name__ == "__main__":
         model_0_results = train(
             model=model,
             train_dataloader=train_dl,
+            train_sampler=train_sampler,
             val_dataloader=val_dl,
+            val_sampler=val_sampler,
             optimizer=optimizer,
             scheduler=scheduler,
             device=DEVICE,
             epochs=NUM_EPOCHS,
+            rank=rank
         )
-
+        dist.destroy_process_group()
         # End the timer and print out how long it took
         end_time = timer()
         print(f"Total training time: {end_time-start_time:.3f} seconds")

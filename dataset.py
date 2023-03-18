@@ -62,10 +62,10 @@ def datasets(train_data, train_batchsize, val_data, val_batchsize, tokenizer, ma
 
 
     train_dataset = TextDataset(train_data, tokenizer, max_len)
-    train_sampler = DistributedSampler(dataset=train_dataset, shuffle=True) 
+    train_sampler = DistributedSampler(dataset=train_dataset, shuffle=True, rank=rank, num_replicas=world_size) 
  
     val_dataset = TextDataset(val_data, tokenizer, max_len)
-    val_sampler = DistributedSampler(dataset=val_dataset, shuffle=False)
+    val_sampler = DistributedSampler(dataset=val_dataset, shuffle=False, rank=rank, num_replicas=world_size)
 
     train_dataloader = DataLoader(dataset=train_dataset,
                                         batch_size=train_batchsize,
@@ -80,4 +80,4 @@ def datasets(train_data, train_batchsize, val_data, val_batchsize, tokenizer, ma
                                         shuffle=False,
                                         pin_memory=True,
                                         sampler=val_sampler) 
-    return train_dataset, val_dataset
+    return train_dataloader, train_sampler, val_dataloader, val_sampler

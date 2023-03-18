@@ -17,16 +17,24 @@ from rich.progress import (
 import torch
 import torch.nn as nn
 
+best_train_accuracy = float("-inf")
+best_val_loss = float("inf")
+curr_val_loss = float("inf")
+
+
 def train_loop(model: torch.nn.Module, 
                dataloader: torch.utils.data.DataLoader, 
                optimizer: torch.optim.Optimizer,
                scheduler,
                device,
                pb,
-               task_train):
+               task_train,
+               rank,
+               local_rank):
     
     model.train()
     train_loss, train_acc = 0, 0
+    ddp_loss = torch.zeros(2).to(local_rank)
 
     # for (x, y) in track(dataloader, "Training"):
     for ind, batch in enumerate(dataloader):
@@ -95,12 +103,15 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 def train(model: torch.nn.Module, 
-          train_dataloader: torch.utils.data.DataLoader, 
+          train_dataloader: torch.utils.data.DataLoader,
+          train_sampler, 
           val_dataloader: torch.utils.data.DataLoader, 
+          val_sampler,
           optimizer: torch.optim.Optimizer,
           scheduler,
           device,
-          epochs: int = 5):
+          epochs: int = 5,
+          rank: int = 0):
     
     console = Console()
     table = Table(title='Model Training/Validation Logs')
@@ -133,7 +144,8 @@ def train(model: torch.nn.Module,
 
         for epoch in range(epochs):
             start_time = time.time()
-
+            train_sampler.set_epoch(epoch)
+            
             train_loss, train_acc = train_loop(model=model,
                                             dataloader=train_dataloader,
                                             optimizer=optimizer,
@@ -142,6 +154,11 @@ def train(model: torch.nn.Module,
                                             pb=pb,
                                             task_train=task_train)
             pb.reset(task_train)
+            # wait_for_everyone
+            torch.distributed.barrier()
+
+            # if rank == 0:
+            val_sampler.set_epoch(epoch)
             val_loss, val_acc = val_loop(model=model,
                                             dataloader=val_dataloader,
                                             device=device,
@@ -162,6 +179,9 @@ def train(model: torch.nn.Module,
             results["train_acc"].append(train_acc)
             results["val_loss"].append(val_loss)
             results["val_acc"].append(val_acc)
+            best_model = True
+            if best_model and rank == 0:
+                torch.save(model.state_dict(), "mnist_cnn.pt")
             pb.update(task_id=task_total, completed=epoch+1)
 
     console.print(table)

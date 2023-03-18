@@ -1,0 +1,12 @@
+NUM_WORKERS: 4
+LR: 1e-5
+NUM_EPOCHS: 2
+MAX_LEN: 87
+MODEL: bert-base-uncased
+NUM_LABELS: 6
+TRAIN_DATA: ./data/train_in1.csv
+TRAIN_BATCH: 64 
+VAL_DATA: ./data/val_in1.csv
+VAL_BATCH: 64 
+TEST_DATA: ./data/test_in.csv
+TEST_BATCH: 64

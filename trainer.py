@@ -41,7 +41,6 @@ def train_loop(model: torch.nn.Module,
         input_mask =  batch['mask'].to(device)
         token_type_ids =  batch['token_type_ids'].to(device)
         labels = batch['targets'].to(device)
-        # pdb.set_trace()
         outputs = model(input_ids, token_type_ids=token_type_ids, attention_mask=input_mask, labels=labels)
         loss = outputs['loss']
 
@@ -108,6 +107,10 @@ def epoch_time(start_time, end_time):
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
     return elapsed_mins, elapsed_secs
 
+
+def loop():
+    return None
+
 def train(model: torch.nn.Module, 
           train_dataloader: torch.utils.data.DataLoader,
           train_sampler, 
@@ -146,10 +149,13 @@ def train(model: torch.nn.Module,
         MofNCompleteColumn(),
         TimeRemainingColumn()
     )
+
+    
     with pb:
-        task_total = pb.add_task('total', total=epochs)
-        task_train = pb.add_task('train', total=len(train_dataloader))
-        task_eval = pb.add_task('eval', total=len(val_dataloader))
+        if rank ==0:
+            task_total = pb.add_task('total', total=epochs)
+            task_train = pb.add_task('train', total=len(train_dataloader))
+            task_eval = pb.add_task('eval', total=len(val_dataloader))
         
 
         for epoch in range(epochs):
@@ -164,7 +170,8 @@ def train(model: torch.nn.Module,
                                             pb=pb,
                                             task_train=task_train,
                                             local_rank=local_rank)
-            pb.reset(task_train)
+            if rank == 0:
+                pb.reset(task_train)
             # wait_for_everyone
             torch.distributed.barrier()
 
@@ -176,27 +183,28 @@ def train(model: torch.nn.Module,
                                             pb=pb,
                                             task_eval=task_eval,
                                             local_rank=local_rank)
-            pb.reset(task_eval)
+            if rank == 0:
+                pb.reset(task_eval)
 
             end_time = time.time()
             epoch_mins, epoch_secs = epoch_time(start_time, end_time)
             time_int = f'{epoch_mins}m {epoch_secs}s'
             table.add_row(str(epoch+1), str(round(train_acc,2)), str(round(train_loss,2)), str(round(val_acc,2)), str(round(val_loss,2)), time_int)
             
-
-            rprint(f"[bold red]Epoch:[/bold red] {epoch+1}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
-
-            if rank == 0 and val_loss < best_val_loss:
-                best_val_loss = val_loss
-                print(f"-->>>> New Val Loss Record: {best_val_loss}")
-                save_name = f"{run_id}-epoch-{epoch+1}.pt"
-                torch.save(model.state_dict(), save_name)
             results["train_loss"].append(train_loss)
             results["train_acc"].append(train_acc)
             results["val_loss"].append(val_loss)
             results["val_acc"].append(val_acc)
-            best_model = True
-            pb.update(task_id=task_total, completed=epoch+1)
 
-    console.print(table)
+            rprint(f"[bold red]Epoch:[/bold red] {epoch+1}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
+
+            if rank == 0:
+                pb.update(task_id=task_total, completed=epoch+1)
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    print(f"-->>>> New Val Loss Record: {best_val_loss}")
+                    save_name = f"{run_id}-epoch-{epoch+1}.pt"
+                    torch.save(model.state_dict(), save_name)                
+    if rank == 0:
+        console.print(table)
     return results

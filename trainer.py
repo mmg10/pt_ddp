@@ -204,7 +204,7 @@ def train(model: torch.nn.Module,
                     best_val_loss = val_loss
                     print(f"-->>>> New Val Loss Record: {best_val_loss}")
                     save_name = f"{run_id}-epoch-{epoch+1}.pt"
-                    torch.save(model.state_dict(), save_name)                
+                    torch.save(model.state_dict(), save_name) # or should it be model.module.state_dict() ??               
     if rank == 0:
         console.print(table)
     return results

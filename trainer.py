@@ -16,10 +16,7 @@ from rich.progress import (
 
 import torch
 import torch.nn as nn
-
-best_train_accuracy = float("-inf")
-best_val_loss = float("inf")
-curr_val_loss = float("inf")
+import torch.distributed as dist
 
 
 def train_loop(model: torch.nn.Module, 
@@ -29,11 +26,11 @@ def train_loop(model: torch.nn.Module,
                device,
                pb,
                task_train,
-               rank,
                local_rank):
     
     model.train()
-    train_loss, train_acc = 0, 0
+    # train_loss, train_acc = 0, 0cccc
+    train_acc = 0
     ddp_loss = torch.zeros(2).to(local_rank)
 
     # for (x, y) in track(dataloader, "Training"):
@@ -50,7 +47,8 @@ def train_loop(model: torch.nn.Module,
 
         y_pred = torch.argmax(outputs['logits'], dim=1)
 
-        train_loss += loss.item() 
+        ddp_loss[0] += loss.item() 
+        ddp_loss[1] += len(batch)
         train_acc += (y_pred == labels).sum().item()/len(y_pred)
 
         optimizer.zero_grad()
@@ -58,8 +56,9 @@ def train_loop(model: torch.nn.Module,
         optimizer.step()
         scheduler.step()
         pb.update(task_id=task_train, completed=ind+1)
-        
-    train_loss = train_loss / len(dataloader)
+    
+    dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
+    train_loss = (ddp_loss[0] / ddp_loss[1]).item()
     train_acc = train_acc / len(dataloader) *100
     return train_loss, train_acc
 
@@ -68,10 +67,13 @@ def val_loop(model: torch.nn.Module,
               dataloader: torch.utils.data.DataLoader, 
               device,
               pb,
-              task_eval):
+              task_eval,
+              local_rank):
 
     model.eval() 
-    val_loss, val_acc = 0, 0
+    # val_loss, val_acc = 0, 0
+    val_acc = 0
+    ddp_loss = torch.zeros(2).to(local_rank)
     
     
     # for (x, y) in track(dataloader, "Validating"):
@@ -88,11 +90,15 @@ def val_loop(model: torch.nn.Module,
 
         y_pred = torch.argmax(outputs['logits'], dim=1)
 
-        val_loss += loss.item()
+        # val_loss += loss.item()
+        ddp_loss[0] += loss.item() 
+        ddp_loss[1] += len(batch)
         val_acc += ((y_pred == labels).sum().item()/len(y_pred))
         pb.update(task_id=task_eval, completed=ind+1)
             
-    val_loss = val_loss / len(dataloader)
+    # val_loss = val_loss / len(dataloader)
+    dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
+    val_loss = (ddp_loss[0] / ddp_loss[1]).item()
     val_acc = val_acc / len(dataloader) *100
     return val_loss, val_acc
 
@@ -111,7 +117,9 @@ def train(model: torch.nn.Module,
           scheduler,
           device,
           epochs: int = 5,
-          rank: int = 0):
+          rank: int = 0,
+          local_rank: int = 0,
+          run_id = 0):
     
     console = Console()
     table = Table(title='Model Training/Validation Logs')
@@ -122,6 +130,8 @@ def train(model: torch.nn.Module,
     table.add_column('Valid Loss', style='blue', justify='center')
     table.add_column('Time', style='red', justify='right')
     
+    best_train_accuracy = float("-inf")
+    best_val_loss = float("inf")
 
     results =  {"train_loss": [],
                 "train_acc": [],
@@ -152,7 +162,8 @@ def train(model: torch.nn.Module,
                                             scheduler=scheduler,
                                             device=device,
                                             pb=pb,
-                                            task_train=task_train)
+                                            task_train=task_train,
+                                            local_rank=local_rank)
             pb.reset(task_train)
             # wait_for_everyone
             torch.distributed.barrier()
@@ -163,7 +174,8 @@ def train(model: torch.nn.Module,
                                             dataloader=val_dataloader,
                                             device=device,
                                             pb=pb,
-                                            task_eval=task_eval)
+                                            task_eval=task_eval,
+                                            local_rank=local_rank)
             pb.reset(task_eval)
 
             end_time = time.time()
@@ -174,14 +186,16 @@ def train(model: torch.nn.Module,
 
             rprint(f"[bold red]Epoch:[/bold red] {epoch+1}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
 
-
+            if rank == 0 and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                print(f"-->>>> New Val Loss Record: {best_val_loss}")
+                save_name = f"{run_id}-epoch-{epoch+1}.pt"
+                torch.save(model.state_dict(), save_name)
             results["train_loss"].append(train_loss)
             results["train_acc"].append(train_acc)
             results["val_loss"].append(val_loss)
             results["val_acc"].append(val_acc)
             best_model = True
-            if best_model and rank == 0:
-                torch.save(model.state_dict(), "mnist_cnn.pt")
             pb.update(task_id=task_total, completed=epoch+1)
 
     console.print(table)

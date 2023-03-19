@@ -31,10 +31,10 @@ TRAIN_BATCH = config["TRAIN_BATCH"]
 VAL_BATCH = config["VAL_BATCH"]
 NUM_WORKERS = config["NUM_WORKERS"]
 
-TRAIN_DATA = pd.read_csv( config["TRAIN_DATA"])
-VAL_DATA = pd.read_csv( config["VAL_DATA"])
-TRAIN_DATA = TRAIN_DATA[:1024]
-VAL_DATA = VAL_DATA[:512]
+# TRAIN_DATA = pd.read_csv( config["TRAIN_DATA"])
+# VAL_DATA = pd.read_csv( config["VAL_DATA"])
+# TRAIN_DATA = TRAIN_DATA[:1024]
+# VAL_DATA = VAL_DATA[:512]
 
 # TEST_DATA = pd.read_csv( config["TEST_DATA"])
 MAX_LEN = config["MAX_LEN"]
@@ -67,7 +67,7 @@ val_df.rename(columns = {'label':'targets'}, inplace = True)
 
 if __name__ == "__main__":
     n_gpus = torch.cuda.device_count()
-    if n_gpus < 2:
+    if n_gpus < 1:
         print(f"Requires at least 2 GPUs to run, but got {n_gpus}.")
     else:
         #######################
@@ -113,9 +113,13 @@ if __name__ == "__main__":
             scheduler=scheduler,
             device=DEVICE,
             epochs=NUM_EPOCHS,
-            rank=rank
+            rank=rank,
+            local_rank=local_rank,
+            run_id=run_id
         )
         dist.destroy_process_group()
         # End the timer and print out how long it took
         end_time = timer()
         print(f"Total training time: {end_time-start_time:.3f} seconds")
+        dist.barrier()
+        dist.destroy_process_group()

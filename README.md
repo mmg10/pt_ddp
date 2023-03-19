@@ -13,5 +13,5 @@ torchrun --nnodes=1 --nproc_per_node=4 --rdzv_id=101 --rdzv_endpoint="localhost:
 
 # to do
 
-make loss have loss and batch size
-dist all reduce
+<!-- make loss have loss and batch size -->
+<!-- dist all reduce -->

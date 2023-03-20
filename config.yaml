@@ -1,5 +1,5 @@
-LR: 1e-5
-NUM_EPOCHS: 1
+LR: 2e-5
+NUM_EPOCHS: 2
 MAX_LEN: 87
 MODEL: bert-base-uncased
 NUM_LABELS: 6

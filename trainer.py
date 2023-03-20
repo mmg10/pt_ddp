@@ -1,5 +1,6 @@
 import pdb
 import time
+import contextlib
 
 from rich.console import Console
 from rich.table import Table
@@ -207,7 +208,6 @@ class TrainerClass:
         
         cm = self.pb if self.rank == 0 else contextlib.nullcontext()
         with cm:            
-            print(f'rank: {rank}, cm: {cm}')
             for epoch in range(1,self.max_epochs+1):
                 start_time = time.time()
                 self.train_sampler.set_epoch(epoch)
@@ -231,14 +231,16 @@ class TrainerClass:
                 end_time = time.time()
                 epoch_mins, epoch_secs = self._epoch_time(start_time, end_time)
                 time_int = f'{epoch_mins}m {epoch_secs}s'
-                table.add_row(str(epoch), str(round(train_acc,2)), str(round(train_loss,2)), str(round(val_acc,2)), str(round(val_loss,2)), time_int)
-                
-                results["train_loss"].append(train_loss)
-                results["train_acc"].append(train_acc)
-                results["val_loss"].append(val_loss)
-                results["val_acc"].append(val_acc)
 
-                rprint(f"[bold red]Epoch:[/bold red] {epoch}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
+                if self.rank == 0:
+                    table.add_row(str(epoch), str(round(train_acc,2)), str(round(train_loss,2)), str(round(val_acc,2)), str(round(val_loss,2)), time_int)
+                    
+                    results["train_loss"].append(train_loss)
+                    results["train_acc"].append(train_acc)
+                    results["val_loss"].append(val_loss)
+                    results["val_acc"].append(val_acc)
+
+                    rprint(f"[bold red]Epoch:[/bold red] {epoch}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
 
                 if self.rank != 0:
                     print(f'======= rank is {self.rank} here')
@@ -251,7 +253,9 @@ class TrainerClass:
                         torch.save(self.model.state_dict(), save_name) # or should it be model.module.state_dict() ??               
         if self.rank == 0:
             console.print(table)
-        return results
+            return results
+        else:
+            return None
 
 
 

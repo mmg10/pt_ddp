@@ -78,5 +78,5 @@ def datasets(train_data, train_batchsize, val_data, val_batchsize, tokenizer, ma
                                         num_workers=4, 
                                         pin_memory=True,
                                         sampler=val_sampler) 
-    # return train_dataloader, train_sampler, val_dataloader, val_sampler
-    return val_dataloader, val_sampler, val_dataloader, val_sampler
+    return train_dataloader, train_sampler, val_dataloader, val_sampler
+    # return val_dataloader, val_sampler, val_dataloader, val_sampler

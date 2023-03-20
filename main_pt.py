@@ -14,7 +14,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import BertTokenizer, BertConfig
 
 from model import ModelClass
-from trainer import train
+from trainer import TrainerClass
 from dataset import datasets
 
 # Set random seeds
@@ -51,10 +51,10 @@ emotions = load_dataset("emotion")
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
 
 
-def tokenize(batch):
-    return tokenizer(batch["text"], padding=True, truncation=True)
+# def tokenize(batch):
+#     return tokenizer(batch["text"], padding=True, truncation=True)
 
-emotions_encoded = emotions.map(tokenize, batched=True, batch_size=None)
+# emotions_encoded = emotions.map(tokenize, batched=True, batch_size=None)
 
 emotions.set_format(type="pandas")
 train_df = emotions["train"][:]
@@ -101,9 +101,7 @@ if __name__ == "__main__":
             total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"--> {MODEL} has {total_params/1e6} Million params\n")
 
-        start_time = timer()
-
-        model_0_results = train(
+        trainer = TrainerClass(
             model=model,
             train_dataloader=train_dl,
             train_sampler=train_sampler,
@@ -117,6 +115,9 @@ if __name__ == "__main__":
             local_rank=local_rank,
             run_id=run_id
         )
+        start_time = timer()
+
+        train_results = trainer.fit()
         dist.destroy_process_group()
         # End the timer and print out how long it took
         end_time = timer()

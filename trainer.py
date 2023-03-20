@@ -38,7 +38,7 @@ class TrainerClass:
           scheduler,
           device,
           epochs: int = 5,
-          rank: int = 0,
+          rank: int = 1,
           local_rank: int = 0,
           run_id = 0):
         
@@ -55,15 +55,16 @@ class TrainerClass:
         self.local_rank = local_rank
         self.run_id = run_id      
 
-        self.pb = Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                MofNCompleteColumn(),
-                TimeRemainingColumn()
-            )
+        
 
         if self.rank ==0:
+            self.pb = Progress(
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    MofNCompleteColumn(),
+                    TimeRemainingColumn()
+                )
             self.task_total = self.pb.add_task('total', total=self.max_epochs)
             self.task_train = self.pb.add_task('train', total=len(self.train_dataloader))
             self.task_eval = self.pb.add_task('eval', total=len(self.val_dataloader))
@@ -79,7 +80,7 @@ class TrainerClass:
         self.model.train()
         # train_loss, train_acc = 0, 0cccc
         train_acc = 0
-        ddp_loss = torch.zeros(2).to(self.local_rank)
+        ddp_train_loss = torch.zeros(2).to(self.local_rank)
 
         # for (x, y) in track(dataloader, "Training"):
         for ind, batch in enumerate(self.train_dataloader):
@@ -94,8 +95,8 @@ class TrainerClass:
 
             y_pred = torch.argmax(outputs['logits'], dim=1)
 
-            ddp_loss[0] += loss.item() 
-            ddp_loss[1] += len(batch)
+            ddp_train_loss[0] += loss.item() 
+            ddp_train_loss[1] += len(batch)
             train_acc += (y_pred == labels).sum().item()/len(y_pred)
 
             loss.backward()
@@ -104,10 +105,14 @@ class TrainerClass:
             if self.rank == 0:
                 self.pb.update(task_id=self.task_train, completed=ind+1)
         
-        dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
-        train_loss = (ddp_loss[0] / ddp_loss[1]).item()
+        # rprint(f'rank: {self.rank}, loss: {ddp_train_loss}')
+        dist.all_reduce(ddp_train_loss, op=dist.ReduceOp.SUM)
+        # rprint(f'rank: {self.rank}, loss: {ddp_train_loss}')
+        if self.rank==1:
+            print(f'rank: {self.rank}, loss: {ddp_train_loss}')
+        ddp_train_loss = (ddp_train_loss[0] / ddp_train_loss[1]).item()
         train_acc = train_acc / len(self.train_dataloader) *100
-        return train_loss, train_acc
+        return ddp_train_loss, train_acc
         
     @abstractmethod
     def _val_epoch(self):
@@ -119,7 +124,7 @@ class TrainerClass:
 
         self.model.eval() 
         val_acc = 0
-        ddp_loss = torch.zeros(2).to(self.local_rank)
+        ddp_val_loss = torch.zeros(2).to(self.local_rank)
 
         for ind, batch in enumerate(self.val_dataloader):
             input_ids = batch['ids'].to(self.device)
@@ -134,16 +139,18 @@ class TrainerClass:
 
             y_pred = torch.argmax(outputs['logits'], dim=1)
 
-            ddp_loss[0] += loss.item() 
-            ddp_loss[1] += len(batch)
+            ddp_val_loss[0] += loss.item() 
+            ddp_val_loss[1] += len(batch)
             val_acc += (y_pred == labels).sum().item()/len(y_pred)
             if self.rank == 0:
                 self.pb.update(task_id=self.task_eval, completed=ind+1)
         
-        dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
-        val_loss = (ddp_loss[0] / ddp_loss[1]).item()
+        # print(f'rank: {self.rank}, loss: {ddp_val_loss}')
+        dist.all_reduce(ddp_val_loss, op=dist.ReduceOp.SUM)
+        # print(f'rank: {self.rank}, loss: {ddp_val_loss}')
+        ddp_val_loss = (ddp_val_loss[0] / ddp_val_loss[1]).item()
         val_acc = val_acc / len(self.val_dataloader) *100
-        return val_loss, val_acc
+        return ddp_val_loss, val_acc
 
     def _epoch_time(self, start_time, end_time):
         elapsed_time = end_time - start_time
@@ -178,26 +185,29 @@ class TrainerClass:
 
     def fit(self):
     
-        console = Console()
-        table = Table(title='Model Training/Validation Logs')
-        table.add_column('epoch', style='blue')
-        table.add_column('Train Acc', style='green', justify='center')
-        table.add_column('Train Loss', style='red', justify='center')
-        table.add_column('Valid Acc', style='green', justify='center')
-        table.add_column('Valid Loss', style='blue', justify='center')
-        table.add_column('Time', style='red', justify='right')
+        if self.rank == 0:
+            console = Console()
+            table = Table(title='Model Training/Validation Logs')
+            table.add_column('epoch', style='blue')
+            table.add_column('Train Acc', style='green', justify='center')
+            table.add_column('Train Loss', style='red', justify='center')
+            table.add_column('Valid Acc', style='green', justify='center')
+            table.add_column('Valid Loss', style='blue', justify='center')
+            table.add_column('Time', style='red', justify='right')
 
-        best_train_accuracy = float("-inf")
-        best_val_loss = float("inf")
-
-        results =  {"train_loss": [],
+            results =  {"train_loss": [],
                         "train_acc": [],
                         "val_loss": [],
                         "val_acc": []
                         }
 
-        with self.pb:            
+            best_train_accuracy = float("-inf")
+            best_val_loss = float("inf")
 
+        
+        cm = self.pb if self.rank == 0 else contextlib.nullcontext()
+        with cm:            
+            print(f'rank: {rank}, cm: {cm}')
             for epoch in range(1,self.max_epochs+1):
                 start_time = time.time()
                 self.train_sampler.set_epoch(epoch)
@@ -230,6 +240,8 @@ class TrainerClass:
 
                 rprint(f"[bold red]Epoch:[/bold red] {epoch}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
 
+                if self.rank != 0:
+                    print(f'======= rank is {self.rank} here')
                 if self.rank == 0:
                     self.pb.update(task_id=self.task_total, completed=epoch)
                     if val_loss < best_val_loss:

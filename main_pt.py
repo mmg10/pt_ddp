@@ -25,11 +25,18 @@ with open("config.yaml", "r", encoding='utf_8') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 NUM_EPOCHS = config["NUM_EPOCHS"]
 LR = float(config["LR"])
 TRAIN_BATCH = config["TRAIN_BATCH"]
 VAL_BATCH = config["VAL_BATCH"]
-NUM_WORKERS = config["NUM_WORKERS"]
+# NUM_WORKERS = config["NUM_WORKERS"]
+
+NUM_WORKERS = os.cpu_count() / int(os.environ['LOCAL_WORLD_SIZE'])
+os.environ["OMP_NUM_THREADS"] = str(NUM_WORKERS)
+
+
 
 # TRAIN_DATA = pd.read_csv( config["TRAIN_DATA"])
 # VAL_DATA = pd.read_csv( config["VAL_DATA"])
@@ -77,6 +84,11 @@ if __name__ == "__main__":
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
 
+        if rank == 0:
+            if n_gpus != int(os.environ['LOCAL_WORLD_SIZE']):
+                print('not using all GPUs')
+            print(f'num of workers: {NUM_WORKERS}')
+
         # initialize the process group
         # dist.init_process_group("nccl", rank=rank, world_size=world_size) # extra args taken care by torchrun 
         dist.init_process_group("nccl")
@@ -118,9 +130,11 @@ if __name__ == "__main__":
         start_time = timer()
 
         train_results = trainer.fit()
-        dist.destroy_process_group()
-        # End the timer and print out how long it took
+
         end_time = timer()
-        print(f"Total training time: {end_time-start_time:.3f} seconds")
+
         dist.barrier()
         dist.destroy_process_group()
+        # print out how long it took
+        
+        print(f"Total training time: {end_time-start_time:.3f} seconds")

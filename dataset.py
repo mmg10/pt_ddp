@@ -72,16 +72,11 @@ def datasets(train_data, train_batchsize, val_data, val_batchsize, tokenizer, ma
                                         num_workers=4, 
                                         pin_memory=True,
                                         sampler=train_sampler) 
-    
-    # train_dataloader = DataLoader(dataset=val_dataset, # change back to train_dataset
-    #                                     batch_size=train_batchsize,
-    #                                     num_workers=4, 
-    #                                     pin_memory=True,
-    #                                     sampler=val_sampler) # change back to train_sampler
 
     val_dataloader = DataLoader(dataset=val_dataset,
                                         batch_size=val_batchsize, 
                                         num_workers=4, 
                                         pin_memory=True,
                                         sampler=val_sampler) 
-    return train_dataloader, train_sampler, val_dataloader, val_sampler
+    # return train_dataloader, train_sampler, val_dataloader, val_sampler
+    return val_dataloader, val_sampler, val_dataloader, val_sampler

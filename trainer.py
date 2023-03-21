@@ -18,6 +18,7 @@ from rich.progress import (
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from torch.profiler import profile, record_function, ProfilerActivity
 
 
 
@@ -41,7 +42,8 @@ class TrainerClass:
           epochs: int = 5,
           rank: int = 1,
           local_rank: int = 0,
-          run_id = 0):
+          run_id = 0,
+          enable_profiler = True):
         
         self.model = model
         self.train_dataloader = train_dataloader
@@ -54,7 +56,9 @@ class TrainerClass:
         self.max_epochs = epochs
         self.rank = rank
         self.local_rank = local_rank
-        self.run_id = run_id      
+        self.run_id = run_id
+        self.enable_profiler = enable_profiler
+        self.torch_profiler = None
 
         
 
@@ -81,23 +85,24 @@ class TrainerClass:
         self.model.train()
         # train_loss, train_acc = 0, 0cccc
         train_acc = 0
-        ddp_train_loss = torch.zeros(2).to(self.local_rank)
+        # ddp_train_loss = torch.zeros(2).to(self.local_rank)
+        ddp_train_loss = torch.zeros(1).to(self.local_rank)
 
         # for (x, y) in track(dataloader, "Training"):
         for ind, batch in enumerate(self.train_dataloader):
             self.model.zero_grad(set_to_none=True)
             # or optimizer.zero_grad()
-            input_ids = batch['ids'].to(self.device)
-            input_mask =  batch['mask'].to(self.device)
-            token_type_ids =  batch['token_type_ids'].to(self.device)
-            labels = batch['targets'].to(self.device)
+            input_ids = batch['ids'].to(self.local_rank)
+            input_mask =  batch['mask'].to(self.local_rank)
+            token_type_ids =  batch['token_type_ids'].to(self.local_rank)
+            labels = batch['targets'].to(self.local_rank)
             outputs = self.model(input_ids, token_type_ids=token_type_ids, attention_mask=input_mask, labels=labels)
             loss = outputs['loss']
 
             y_pred = torch.argmax(outputs['logits'], dim=1)
 
-            ddp_train_loss[0] += loss.item() 
-            ddp_train_loss[1] += len(batch)
+            ddp_train_loss += loss.item() 
+            # ddp_train_loss[1] += len(batch)
             train_acc += (y_pred == labels).sum().item()/len(y_pred)
 
             loss.backward()
@@ -105,13 +110,15 @@ class TrainerClass:
             self.scheduler.step()
             if self.rank == 0:
                 self.pb.update(task_id=self.task_train, completed=ind+1)
+            if self.enable_profiler:
+                self.torch_profiler.step()
         
         # rprint(f'rank: {self.rank}, loss: {ddp_train_loss}')
         dist.all_reduce(ddp_train_loss, op=dist.ReduceOp.SUM)
         # rprint(f'rank: {self.rank}, loss: {ddp_train_loss}')
         if self.rank==1:
             print(f'rank: {self.rank}, loss: {ddp_train_loss}')
-        ddp_train_loss = (ddp_train_loss[0] / ddp_train_loss[1]).item()
+        ddp_train_loss = (ddp_train_loss / len(self.train_dataloader)).item()
         train_acc = train_acc / len(self.train_dataloader) *100
         return ddp_train_loss, train_acc
         
@@ -125,13 +132,14 @@ class TrainerClass:
 
         self.model.eval() 
         val_acc = 0
-        ddp_val_loss = torch.zeros(2).to(self.local_rank)
+        # ddp_val_loss = torch.zeros(2).to(self.local_rank)
+        ddp_val_loss = torch.zeros(1).to(self.local_rank)
 
         for ind, batch in enumerate(self.val_dataloader):
-            input_ids = batch['ids'].to(self.device)
-            input_mask =  batch['mask'].to(self.device)
-            token_type_ids =  batch['token_type_ids'].to(self.device)
-            labels = batch['targets'].to(self.device)
+            input_ids = batch['ids'].to(self.local_rank)
+            input_mask =  batch['mask'].to(self.local_rank)
+            token_type_ids =  batch['token_type_ids'].to(self.local_rank)
+            labels = batch['targets'].to(self.local_rank)
             
             with torch.inference_mode():
                 outputs = self.model(input_ids, token_type_ids=token_type_ids, attention_mask=input_mask, labels=labels)
@@ -140,17 +148,20 @@ class TrainerClass:
 
             y_pred = torch.argmax(outputs['logits'], dim=1)
 
-            ddp_val_loss[0] += loss.item() 
-            ddp_val_loss[1] += len(batch)
+            ddp_val_loss += loss.item() 
             val_acc += (y_pred == labels).sum().item()/len(y_pred)
+
             if self.rank == 0:
                 self.pb.update(task_id=self.task_eval, completed=ind+1)
         
         # print(f'rank: {self.rank}, loss: {ddp_val_loss}')
         dist.all_reduce(ddp_val_loss, op=dist.ReduceOp.SUM)
         # print(f'rank: {self.rank}, loss: {ddp_val_loss}')
-        ddp_val_loss = (ddp_val_loss[0] / ddp_val_loss[1]).item()
+        # print(f'{ddp_val_loss}-{len(self.val_dataloader)}-{val_acc}')
+        ddp_val_loss = (ddp_val_loss / len(self.val_dataloader)).item()
+        
         val_acc = val_acc / len(self.val_dataloader) *100
+        
         return ddp_val_loss, val_acc
 
     def _epoch_time(self, start_time, end_time):
@@ -207,50 +218,65 @@ class TrainerClass:
 
         
         cm = self.pb if self.rank == 0 else contextlib.nullcontext()
-        with cm:            
-            for epoch in range(1,self.max_epochs+1):
-                start_time = time.time()
-                self.train_sampler.set_epoch(epoch)
-                
-                train_loss, train_acc = self._train_epoch()
-                if self.rank == 0:
-                    self.pb.reset(self.task_train)
-                # wait_for_everyone
-                torch.distributed.barrier()
-
-                # if rank == 0:
-                self.val_sampler.set_epoch(epoch)
-                val_loss, val_acc = self._val_epoch()
-
-                if self.rank == 0:
-                    self.pb.reset(self.task_eval)
-
-                # wait_for_everyone
-                torch.distributed.barrier()
-
-                end_time = time.time()
-                epoch_mins, epoch_secs = self._epoch_time(start_time, end_time)
-                time_int = f'{epoch_mins}m {epoch_secs}s'
-
-                if self.rank == 0:
-                    table.add_row(str(epoch), str(round(train_acc,2)), str(round(train_loss,2)), str(round(val_acc,2)), str(round(val_loss,2)), time_int)
+        self.torch_profiler = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    "fsdp"
+                ),
+                profile_memory=True,
+                with_stack=True,
+                record_shapes=True) if self.enable_profiler else contextlib.nullcontext()
+        with self.torch_profiler:
+            with cm:            
+                for epoch in range(1,self.max_epochs+1):
+                    start_time = time.time()
+                    self.train_sampler.set_epoch(epoch-1)
                     
-                    results["train_loss"].append(train_loss)
-                    results["train_acc"].append(train_acc)
-                    results["val_loss"].append(val_loss)
-                    results["val_acc"].append(val_acc)
+                    train_loss, train_acc = self._train_epoch()
+                    if self.rank == 0:
+                        self.pb.reset(self.task_train)
+                    # wait_for_everyone
+                    torch.distributed.barrier()
 
-                    rprint(f"[bold red]Epoch:[/bold red] {epoch}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
+                    # if rank == 0:
+                    self.val_sampler.set_epoch(epoch-1)
+                    val_loss, val_acc = self._val_epoch()
 
-                if self.rank != 0:
-                    print(f'======= rank is {self.rank} here')
-                if self.rank == 0:
-                    self.pb.update(task_id=self.task_total, completed=epoch)
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        print(f"-->>>> New Val Loss Record: {best_val_loss}")
-                        save_name = f"{self.run_id}-epoch-{epoch}.pt"
-                        torch.save(self.model.state_dict(), save_name) # or should it be model.module.state_dict() ??               
+                    if self.rank == 0:
+                        self.pb.reset(self.task_eval)
+
+                    # wait_for_everyone
+                    torch.distributed.barrier()
+
+                    end_time = time.time()
+                    epoch_mins, epoch_secs = self._epoch_time(start_time, end_time)
+                    time_int = f'{epoch_mins}m {epoch_secs}s'
+
+                    if self.rank == 0:
+                        table.add_row(str(epoch), str(round(train_acc,2)), str(round(train_loss,2)), str(round(val_acc,2)), str(round(val_loss,2)), time_int)
+                        
+                        results["train_loss"].append(train_loss)
+                        results["train_acc"].append(train_acc)
+                        results["val_loss"].append(val_loss)
+                        results["val_acc"].append(val_acc)
+
+                        rprint(f"[bold red]Epoch:[/bold red] {epoch}, [bold red]Train Acc:[/bold red] {str(round(train_acc,2))}, [bold red]Train Loss:[/bold red] {str(round(train_loss,2))}, [bold red]Val Acc:[/bold red] {str(round(val_acc,2))}, [bold red]Val Loss:[/bold red] {str(round(val_loss,2))}, [bold red]Time:[/bold red] {time_int}")
+
+                    if self.rank != 0:
+                        print(f'======= rank is {self.rank} here')
+                    if self.rank == 0:
+                        self.pb.update(task_id=self.task_total, completed=epoch)
+                        if val_loss < best_val_loss:
+                            best_val_loss = val_loss
+                            print(f"-->>>> New Val Loss Record: {best_val_loss}")
+                            save_name = f"{self.run_id}-epoch-{epoch}.pt"
+                            # torch.save(self.model.state_dict(), save_name) # or should it be model.module.state_dict() ??               
+        
+        
         if self.rank == 0:
             console.print(table)
             return results

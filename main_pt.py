@@ -32,6 +32,7 @@ LR = float(config["LR"])
 TRAIN_BATCH = config["TRAIN_BATCH"]
 VAL_BATCH = config["VAL_BATCH"]
 # NUM_WORKERS = config["NUM_WORKERS"]
+PROFILE = config["PROFILE"]
 
 NUM_WORKERS = os.cpu_count() / int(os.environ['LOCAL_WORLD_SIZE'])
 os.environ["OMP_NUM_THREADS"] = str(NUM_WORKERS)
@@ -125,7 +126,8 @@ if __name__ == "__main__":
             epochs=NUM_EPOCHS,
             rank=rank,
             local_rank=local_rank,
-            run_id=run_id
+            run_id=run_id,
+            enable_profiler=PROFILE
         )
         start_time = timer()
 

@@ -9,3 +9,4 @@ VAL_DATA: ./data/val_in1.csv
 VAL_BATCH: 64 
 TEST_DATA: ./data/test_in.csv
 TEST_BATCH: 64
+PROFILE: True

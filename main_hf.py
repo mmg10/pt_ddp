@@ -27,7 +27,7 @@ NUM_EPOCHS = config["NUM_EPOCHS"]
 LR = float(config["LR"])
 TRAIN_BATCH = config["TRAIN_BATCH"]
 VAL_BATCH = config["VAL_BATCH"]
-NUM_WORKERS = config["NUM_WORKERS"]
+NUM_WORKERS =  4 # config["NUM_WORKERS"]
 
 
 MAX_LEN = config["MAX_LEN"]
